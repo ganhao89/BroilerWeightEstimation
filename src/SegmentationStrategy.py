@@ -38,7 +38,7 @@ class ClassicalSegmenter(Segmenter):
             cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
         # Remove orange color (feeder) from mask
-        feeder_mask = ((h > 5) & (h < 25) & (s > 80)).astype(np.uint8) * 255
+        feeder_mask = ((h > 8) & (h < 20) & (s > 150) & (v > 100)).astype(np.uint8) * 255
         mask[feeder_mask == 255] = 0
 
         kernel = np.ones((5, 5), np.uint8)

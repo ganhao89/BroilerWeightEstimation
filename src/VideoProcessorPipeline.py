@@ -33,9 +33,7 @@ class VideoProcessor:
         self.video_reader = VideoReader(str(camera_config.video_path))
         self.show_window = show_img
 
-        fps, _, _ = self.video_reader.get_info()
-        self.x1, self.y1, self.x2, self.y2 = camera_config.crop_region
-        width, height = self.x2 - self.x1, self.y2 - self.y1
+        fps, width, height = self.video_reader.get_info()
         self.video_writer = VideoWriter(
             output_path=str(camera_config.video_save_path),
             fps=fps,
@@ -46,7 +44,7 @@ class VideoProcessor:
 
         frame_idx = 0
 
-        window_name = f"Camera: {self.config.camera_id} - Cropped"
+        window_name = f"Camera: {self.config.camera_id}"
         if self.show_window:
             cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
             cv2.resizeWindow(window_name, 800, 600)
@@ -64,11 +62,8 @@ class VideoProcessor:
                 print(f"[VideoProcessor] Reached max_frames={self.max_frames}. Stopping.")
                 break
 
-            # Crop region
-            cropped = frame[self.y1:self.y2, self.x1:self.x2]
-
             # 1) Segmentation
-            objects = self.segmenter.segment(cropped)
+            objects = self.segmenter.segment(frame)
 
             # 2) Filtering
             selected_objs, clean_mask = self.obj_filter.should_process(objects)
@@ -82,8 +77,8 @@ class VideoProcessor:
 
                 cx = x + w // 2
                 cy = y + h // 2
-                cv2.rectangle(cropped, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                cv2.putText(cropped, f"{volume:.2f} kg",
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                cv2.putText(frame, f"{volume:.2f} kg",
                             (int(cx), int(cy)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 0, 0), 2)
 
                 record = {
@@ -97,12 +92,12 @@ class VideoProcessor:
                 self.output_writer.write(record)
 
             if self.show_window:
-                cv2.imshow(window_name, cropped)
+                cv2.imshow(window_name, frame)
                 if cv2.waitKey(33) & 0xFF == ord('q'):
                     print("[VideoProcessor] Quitting due to user input.")
                     break
 
-            self.video_writer.write(cropped)
+            self.video_writer.write(frame)
 
         self.clean_up()
 

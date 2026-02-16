@@ -7,6 +7,7 @@ from pathlib import Path
 
 from CameraLoader import CameraConfigLoader
 from Factories import AreaCalculatorFactory, AreaMethod, SegmentationMethod, SegmenterFactory
+from FeederCalibration import calibrate_pixel_to_cm
 from ObjectFilterStrategy import SimpleObjectFilter
 from OutputWriters import CSVOutputWriter
 from VideoProcessorPipeline import VideoProcessor
@@ -22,12 +23,15 @@ def main():
 
     loader = CameraConfigLoader()
 
+    video_path = str(TEST_VIDEOS_DIR / "cam1.mp4")
+
     cam = loader.get_camera_info(
         camera_id="cam1",
-        video_path=str(TEST_VIDEOS_DIR / "cam1.mp4"),
+        video_path=video_path,
         video_save_path=str(RESULTS_DIR / "cam1_output.mp4"),
-        camera_config="cameras_config.json"
     )
+
+    pixel_to_cm = calibrate_pixel_to_cm(video_path)
 
     seg_factory = SegmenterFactory()
     area_factory = AreaCalculatorFactory()
@@ -44,7 +48,7 @@ def main():
 
     area_calc = area_factory.create(
         AreaMethod.CALIBRATED,
-        pixel_to_cm=cam.pixel_to_cm
+        pixel_to_cm=pixel_to_cm
     )
 
     output_writer = CSVOutputWriter(csv_path=str(RESULTS_DIR / f"{cam.camera_id}_results.csv"))
