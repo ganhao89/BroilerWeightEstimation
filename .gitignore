@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 *_results.csv
 *_output.mp4
+raw_videos/
+test_videos/
+results/
