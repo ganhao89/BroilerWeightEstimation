@@ -57,15 +57,14 @@ def format_time(seconds: float) -> str:
 
 def select_time_range_interactive(video_path: str) -> tuple:
     """
-    Open interactive playback for the user to select start/end times.
-
-    Controls:
-        - Trackbar to seek through the video
-        - 's' to mark start time
-        - 'e' to mark end time
-        - 'q' to confirm and close
-        - Space to pause/resume playback
+    Open a tkinter GUI with video preview, slider, and buttons to select
+    start/end times. Video is paused by default — drag the slider to browse
+    frames, then click Set Start / Set End. Optionally press Play to preview.
     """
+    import threading
+    from tkinter import ttk
+    from PIL import Image, ImageTk
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
@@ -74,56 +73,144 @@ def select_time_range_interactive(video_path: str) -> tuple:
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration = total_frames / fps if fps > 0 else 0
 
-    start_time = 0.0
-    end_time = duration
-    paused = False
-    window_name = "Time Selection (s=start, e=end, Space=pause, q=confirm)"
+    # State
+    state = {
+        "start_time": 0.0,
+        "end_time": duration,
+        "playing": False,
+        "current_frame": 0,
+        "confirmed": False,
+    }
 
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    # --- Build the GUI ---
+    root = tk.Tk()
+    root.title("Time Selection")
 
-    def on_trackbar(pos):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+    # Get screen size and scale preview to fit
+    screen_w = root.winfo_screenwidth()
+    screen_h = root.winfo_screenheight()
+    orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    max_preview_w = screen_w - 100
+    max_preview_h = screen_h - 300  # leave room for controls
+    scale = min(max_preview_w / orig_w, max_preview_h / orig_h, 1.0)
+    preview_w = int(orig_w * scale)
+    preview_h = int(orig_h * scale)
 
-    cv2.createTrackbar("Frame", window_name, 0, max(total_frames - 1, 1), on_trackbar)
+    # Video display label
+    video_label = tk.Label(root)
+    video_label.pack(padx=5, pady=5)
+
+    # Info label
+    info_var = tk.StringVar(value="Drag the slider to browse frames")
+    info_label = tk.Label(root, textvariable=info_var, font=("Arial", 10))
+    info_label.pack()
+
+    # Slider
+    slider_var = tk.IntVar(value=0)
+    slider = ttk.Scale(root, from_=0, to=max(total_frames - 1, 1),
+                       orient="horizontal", variable=slider_var)
+    slider.pack(fill="x", padx=20, pady=5)
+
+    # Time display
+    time_frame = tk.Frame(root)
+    time_frame.pack(pady=5)
+    start_var = tk.StringVar(value=f"Start: {format_time(0.0)}")
+    end_var = tk.StringVar(value=f"End: {format_time(duration)}")
+    tk.Label(time_frame, textvariable=start_var, font=("Arial", 10), fg="green").pack(side="left", padx=20)
+    tk.Label(time_frame, textvariable=end_var, font=("Arial", 10), fg="red").pack(side="left", padx=20)
+
+    # Buttons
+    btn_frame = tk.Frame(root)
+    btn_frame.pack(pady=10)
+
+    def set_start():
+        t = state["current_frame"] / fps if fps > 0 else 0
+        state["start_time"] = t
+        start_var.set(f"Start: {format_time(t)}")
+        print(f"Start time set: {format_time(t)}")
+
+    def set_end():
+        t = state["current_frame"] / fps if fps > 0 else 0
+        state["end_time"] = t
+        end_var.set(f"End: {format_time(t)}")
+        print(f"End time set: {format_time(t)}")
+
+    def toggle_play():
+        state["playing"] = not state["playing"]
+        play_btn.config(text="Pause" if state["playing"] else "Play")
+
+    def confirm():
+        state["playing"] = False
+        state["confirmed"] = True
+        if state.get("after_id"):
+            root.after_cancel(state["after_id"])
+        root.destroy()
+
+    tk.Button(btn_frame, text="Set Start", command=set_start, width=10,
+              bg="#4CAF50", fg="white").pack(side="left", padx=5)
+    play_btn = tk.Button(btn_frame, text="Play", command=toggle_play, width=10)
+    play_btn.pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Set End", command=set_end, width=10,
+              bg="#f44336", fg="white").pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Confirm", command=confirm, width=10,
+              bg="#2196F3", fg="white").pack(side="left", padx=5)
+
+    # Read and display a frame
+    def show_frame_at(frame_idx):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+        if not ret:
+            return
+        state["current_frame"] = frame_idx
+        # Convert BGR -> RGB, resize, display
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if scale < 1.0:
+            rgb = cv2.resize(rgb, (preview_w, preview_h))
+        img = Image.fromarray(rgb)
+        imgtk = ImageTk.PhotoImage(image=img)
+        video_label.imgtk = imgtk  # prevent garbage collection
+        video_label.config(image=imgtk)
+        # Update info
+        t = frame_idx / fps if fps > 0 else 0
+        info_var.set(f"Frame: {frame_idx}/{total_frames - 1}  |  Time: {format_time(t)}")
+
+    # Show first frame
+    show_frame_at(0)
+
+    # Track slider changes (when user drags it while paused)
+    last_slider_val = [0]
+
+    def update_loop():
+        if state["confirmed"]:
+            return
+        if state["playing"]:
+            next_frame = state["current_frame"] + 1
+            if next_frame >= total_frames:
+                next_frame = 0
+            state["current_frame"] = next_frame
+            slider_var.set(next_frame)
+            show_frame_at(next_frame)
+            delay = max(int(1000 / fps), 1) if fps > 0 else 33
+            state["after_id"] = root.after(delay, update_loop)
+        else:
+            # Check if slider was dragged
+            val = slider_var.get()
+            if val != last_slider_val[0]:
+                last_slider_val[0] = val
+                show_frame_at(val)
+            state["after_id"] = root.after(50, update_loop)
+
+    state["after_id"] = root.after(50, update_loop)
 
     print(f"Video duration: {format_time(duration)} ({total_frames} frames @ {fps:.1f} fps)")
-    print("Controls: 's'=set start, 'e'=set end, Space=pause/play, 'q'=confirm")
-
-    while True:
-        if not paused:
-            ret, frame = cap.read()
-            if not ret:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                continue
-
-        current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
-        current_time = current_frame / fps if fps > 0 else 0
-
-        cv2.setTrackbarPos("Frame", window_name, min(current_frame, total_frames - 1))
-
-        display = frame.copy() if not paused else frame.copy()
-        info = f"Time: {format_time(current_time)} | Start: {format_time(start_time)} | End: {format_time(end_time)}"
-        cv2.putText(display, info, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-        if paused:
-            cv2.putText(display, "PAUSED", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
-        cv2.imshow(window_name, display)
-        key = cv2.waitKey(30 if not paused else 0) & 0xFF
-
-        if key == ord("s"):
-            start_time = current_time
-            print(f"Start time set: {format_time(start_time)}")
-        elif key == ord("e"):
-            end_time = current_time
-            print(f"End time set: {format_time(end_time)}")
-        elif key == ord(" "):
-            paused = not paused
-        elif key == ord("q"):
-            break
+    print("Use the GUI to select start/end times.")
+    root.mainloop()
 
     cap.release()
-    cv2.destroyAllWindows()
+
+    start_time = state["start_time"]
+    end_time = state["end_time"]
 
     if start_time > end_time:
         start_time, end_time = end_time, start_time
@@ -133,10 +220,20 @@ def select_time_range_interactive(video_path: str) -> tuple:
     return start_time, end_time
 
 
+def get_screen_size() -> tuple:
+    """Get screen resolution using tkinter."""
+    root = tk.Tk()
+    root.withdraw()
+    screen_w = root.winfo_screenwidth()
+    screen_h = root.winfo_screenheight()
+    root.destroy()
+    return screen_w, screen_h
+
+
 def select_crop_region(video_path: str, start_time: float) -> tuple:
     """
-    Display the frame at start_time and let the user draw a bounding box.
-    Returns (x, y, w, h) of the selected ROI.
+    Display the frame at start_time (resized to fit screen) and let user draw a bounding box.
+    Returns (x, y, w, h) in original frame coordinates.
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -152,17 +249,49 @@ def select_crop_region(video_path: str, start_time: float) -> tuple:
     if not ret:
         raise RuntimeError(f"Cannot read frame at {format_time(start_time)}")
 
+    orig_h, orig_w = frame.shape[:2]
+
+    # Scale frame to fit screen with some margin
+    screen_w, screen_h = get_screen_size()
+    margin = 100  # leave some margin for window decorations
+    max_w = screen_w - margin
+    max_h = screen_h - margin
+
+    scale = min(max_w / orig_w, max_h / orig_h, 1.0)  # never upscale
+    display_w = int(orig_w * scale)
+    display_h = int(orig_h * scale)
+
+    if scale < 1.0:
+        display_frame = cv2.resize(frame, (display_w, display_h))
+        print(f"Frame resized from {orig_w}x{orig_h} to {display_w}x{display_h} (scale={scale:.2f})")
+    else:
+        display_frame = frame
+        print(f"Frame fits screen at original size {orig_w}x{orig_h}")
+
     print("Draw a bounding box on the frame. Press Enter/Space to confirm, 'c' to cancel.")
-    roi = cv2.selectROI("Select Crop Region", frame, fromCenter=False, showCrosshair=True)
+    roi = cv2.selectROI("Select Crop Region", display_frame, fromCenter=False, showCrosshair=True)
     cv2.destroyAllWindows()
 
     if roi == (0, 0, 0, 0):
         print("No crop region selected. Using full frame.")
-        h, w = frame.shape[:2]
-        return 0, 0, w, h
+        return 0, 0, orig_w, orig_h
 
-    print(f"Crop region: x={roi[0]}, y={roi[1]}, w={roi[2]}, h={roi[3]}")
-    return roi
+    # Map ROI back to original frame coordinates
+    if scale < 1.0:
+        x = int(roi[0] / scale)
+        y = int(roi[1] / scale)
+        w = int(roi[2] / scale)
+        h = int(roi[3] / scale)
+        # Clamp to frame bounds
+        x = min(x, orig_w - 1)
+        y = min(y, orig_h - 1)
+        w = min(w, orig_w - x)
+        h = min(h, orig_h - y)
+    else:
+        x, y, w, h = roi
+
+    print(f"Crop region (original coords): x={x}, y={y}, w={w}, h={h}")
+    return x, y, w, h
 
 
 def ask_weight() -> float:
